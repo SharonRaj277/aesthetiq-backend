@@ -1,0 +1,176 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─────────────────────────────────────────
+    // HELPER FUNCTIONS
+    // ─────────────────────────────────────────
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isDoctor() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/doctors/$(request.auth.uid));
+    }
+
+    function isActiveDoctor() {
+      return isDoctor() &&
+        get(/databases/$(database)/documents/doctors/$(request.auth.uid)).data.status == 'active';
+    }
+
+    function isDoctorAssignedToRequest(requestData) {
+      return isDoctor() && requestData.assignedDoctorId == request.auth.uid;
+    }
+
+    function isPatientOfRequest(requestData) {
+      return isAuthenticated() && requestData.patientId == request.auth.uid;
+    }
+
+    // ─────────────────────────────────────────
+    // USERS (Patients)
+    // ─────────────────────────────────────────
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) &&
+        request.resource.data.uid == userId;
+      allow update: if isOwner(userId) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────
+    // DOCTORS
+    // ─────────────────────────────────────────
+    match /doctors/{doctorId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(doctorId) || isAdmin();
+      allow update: if (isOwner(doctorId) &&
+        // Doctors cannot change their own status or rating
+        !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['status', 'rating', 'ratingCount', 'totalConsultations', 'avgResponseTime']))
+        || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────
+    // EMERGENCY REQUESTS
+    // ─────────────────────────────────────────
+    match /emergencyRequests/{requestId} {
+      allow read: if isAuthenticated() && (
+        isPatientOfRequest(resource.data) ||
+        isDoctorAssignedToRequest(resource.data) ||
+        // Doctors can read requests they were notified about
+        (isDoctor() && request.auth.uid in resource.data.notifiedDoctors) ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() &&
+        request.resource.data.patientId == request.auth.uid &&
+        request.resource.data.status == 'searching';
+      // Only Cloud Functions (via Admin SDK) update requests
+      allow update, delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────
+    // DOCTOR RESPONSES
+    // ─────────────────────────────────────────
+    match /doctorResponses/{responseId} {
+      allow read: if isAuthenticated() && (
+        resource.data.doctorId == request.auth.uid ||
+        isAdmin()
+      );
+      // Only Cloud Functions create response documents
+      allow create: if false;
+      // Doctors can only update their own pending responses to accepted/declined
+      allow update: if isActiveDoctor() &&
+        resource.data.doctorId == request.auth.uid &&
+        resource.data.response == 'pending' &&
+        request.resource.data.response in ['accepted', 'declined'] &&
+        // Cannot change requestId or doctorId
+        request.resource.data.requestId == resource.data.requestId &&
+        request.resource.data.doctorId == resource.data.doctorId;
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────
+    // APPOINTMENTS
+    // ─────────────────────────────────────────
+    match /appointments/{appointmentId} {
+      allow read: if isAuthenticated() && (
+        resource.data.patientId == request.auth.uid ||
+        resource.data.doctorId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() &&
+        request.resource.data.patientId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        resource.data.patientId == request.auth.uid ||
+        resource.data.doctorId == request.auth.uid
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────
+    // TRANSACTIONS
+    // ─────────────────────────────────────────
+    match /transactions/{transactionId} {
+      allow read: if isAuthenticated() && (
+        resource.data.patientId == request.auth.uid ||
+        resource.data.doctorId == request.auth.uid ||
+        isAdmin()
+      );
+      // Transactions are created/updated only by Cloud Functions
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────
+    // ADMINS
+    // ─────────────────────────────────────────
+    match /admins/{adminId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────
+    // ANALYTICS
+    // ─────────────────────────────────────────
+    match /analytics/{document=**} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────
+    // SYSTEM CONFIG (read-only for all auth users)
+    // ─────────────────────────────────────────
+    match /config/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────
+    // TREATMENTS CATALOGUE
+    // ─────────────────────────────────────────
+    match /treatments_facial/{treatmentId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    match /treatments_skin/{treatmentId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    match /treatments_dental/{treatmentId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+  }
+}
