@@ -484,16 +484,28 @@ function validateHttpUrl(url) {
 //   }
 
 router.post('/analyze', async (req, res) => {
-  const body = req.body || {};
-  const scanType = typeof body.scanType === 'string' ? body.scanType.toLowerCase() : 'skin';
+  console.log('[/ai/analyze] hit — body keys:', Object.keys(req.body || {}));
+  try {
+    const body = req.body || {};
+    const scanType = typeof body.scanType === 'string' ? body.scanType.toLowerCase() : 'skin';
 
-  // ── Branch: dental ──────────────────────────────────────────────────────────
-  if (scanType === 'dental') {
-    return handleDentalAnalysis(body, res);
+    // ── Branch: dental ────────────────────────────────────────────────────────
+    if (scanType === 'dental') {
+      return await handleDentalAnalysis(body, res);
+    }
+
+    // ── Branch: skin (original behaviour) ─────────────────────────────────────
+    return await handleSkinAnalysis(body, res);
+  } catch (err) {
+    console.error('[/ai/analyze] unhandled error:', err.message, err.stack);
+    return res.status(500).json({
+      success: true,
+      analysis: MOCK_ANALYSIS,
+      recommendedTreatments: [],
+      mock: true,
+      _error: err.message,
+    });
   }
-
-  // ── Branch: skin (original behaviour) ───────────────────────────────────────
-  return handleSkinAnalysis(body, res);
 });
 
 // ── Skin handler ──────────────────────────────────────────────────────────────
