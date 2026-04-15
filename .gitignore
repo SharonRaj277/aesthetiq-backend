@@ -1,0 +1,24 @@
+# Dependencies — never commit, Railway installs fresh
+node_modules/
+functions/node_modules/
+
+# SQLite database — local data only
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Environment secrets
+.env
+.env.local
+.env.production
+
+# Windows-generated lock file — delete and let Railway regenerate
+package-lock.json
+
+# Build output
+functions/lib/
+dist/
+
+# OS junk
+.DS_Store
+Thumbs.db
