@@ -12,7 +12,7 @@ const { Router } = require('express');
 const { mapTreatments } = require('../engine/treatmentMapper');
 const { matchTreatments } = require('../engine/treatmentMatcher');
 const { mapSkinTreatments } = require('../engine/skinLightMapper');
-const axios = require('../functions/node_modules/axios');
+const axios = require('axios');
 
 const router = Router();
 
@@ -131,7 +131,7 @@ async function getCatalogue(domain) {
   await Promise.all(
     DOMAINS.map(async (d) => {
       try {
-        const resp = await axios.default.get(`${INTERNAL_BASE}/api/treatments?domain=${d}`, { timeout: 5000 });
+        const resp = await axios.get(`${INTERNAL_BASE}/api/treatments?domain=${d}`, { timeout: 5000 });
         const data = resp.data;
         // Normalise: array directly or nested under data/treatments key
         fetched[d] = Array.isArray(data) ? data

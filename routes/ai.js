@@ -14,7 +14,7 @@
 const { Router } = require('express');
 const https = require('https');
 const http = require('http');
-const axios = require('../functions/node_modules/axios');
+const axios = require('axios');
 const { mapSkinTreatments } = require('../engine/skinLightMapper');
 
 const router = Router();
@@ -81,7 +81,7 @@ async function callGemini({ textPrompt, imageBase64, imageMimeType, jsonMode = t
     },
   };
 
-  const resp = await axios.default.post(
+  const resp = await axios.post(
     `${GEMINI_BASE}/${GEMINI_VISION_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
     body,
     { timeout: AI_TIMEOUT_MS }
@@ -110,7 +110,7 @@ async function callGeminiMultiImage({ textPrompt, images = [], jsonMode = true }
     },
   };
 
-  const resp = await axios.default.post(
+  const resp = await axios.post(
     `${GEMINI_BASE}/${GEMINI_VISION_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
     body,
     { timeout: AI_TIMEOUT_MS }
