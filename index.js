@@ -235,7 +235,7 @@ app.use((err, _req, res, _next) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`\nAesthetiQ backend running on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`\nAesthetiQ backend running on port ${PORT}`);
   console.log(`CORS enabled for: all origins\n`);
 });
