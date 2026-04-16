@@ -15,7 +15,11 @@ const { Router } = require('express');
 const https = require('https');
 const http = require('http');
 const axios = require('axios');
+const multer = require('multer');
 const { mapSkinTreatments } = require('../engine/skinLightMapper');
+
+// In-memory storage — files available as req.files[n].buffer
+const upload = multer({ storage: multer.memoryStorage() });
 
 const router = Router();
 
@@ -483,19 +487,28 @@ function validateHttpUrl(url) {
 //     questionnaireAnswers: { ... }
 //   }
 
-router.post('/analyze', async (req, res) => {
-  console.log('[/ai/analyze] hit — body keys:', Object.keys(req.body || {}));
+router.post('/analyze', upload.array('images'), async (req, res) => {
+  console.log('[/ai/analyze] hit — body keys:', Object.keys(req.body || {}), '| files:', req.files?.length ?? 0);
   try {
-    const body = req.body || {};
-    const scanType = typeof body.scanType === 'string' ? body.scanType.toLowerCase() : 'skin';
+    const files    = req.files;   // populated by multer when Content-Type is multipart
+    const body     = req.body || {};
+    const scanType = typeof body.scanType === 'string' ? body.scanType.toLowerCase()
+                   : typeof body.type    === 'string' ? body.type.toLowerCase()
+                   : 'skin';
 
-    // ── Branch: dental ────────────────────────────────────────────────────────
+    // ── Branch: multipart/form-data (React Native FormData) ───────────────────
+    if (files && files.length > 0) {
+      return await handleMultipartAnalysis({ files, scanType, body }, res);
+    }
+
+    // ── Branch: dental JSON ───────────────────────────────────────────────────
     if (scanType === 'dental') {
       return await handleDentalAnalysis(body, res);
     }
 
-    // ── Branch: skin (original behaviour) ─────────────────────────────────────
+    // ── Branch: skin JSON (original behaviour) ────────────────────────────────
     return await handleSkinAnalysis(body, res);
+
   } catch (err) {
     console.error('[/ai/analyze] unhandled error:', err.message, err.stack);
     return res.status(500).json({
@@ -507,6 +520,70 @@ router.post('/analyze', async (req, res) => {
     });
   }
 });
+
+// ── Multipart handler (React Native FormData) ─────────────────────────────────
+// Converts each uploaded buffer to base64, calls Gemini with all images,
+// returns the same response shape as the JSON paths.
+async function handleMultipartAnalysis({ files, scanType, body }, res) {
+  // Convert buffers → base64 image objects
+  const images = files.map((f) => ({
+    data:     f.buffer.toString('base64'),
+    mimeType: f.mimetype || 'image/jpeg',
+  }));
+
+  const isDental = scanType === 'dental';
+
+  try {
+    const prompt = isDental
+      ? buildDentalPrompt({
+          painLevel:           body.painLevel,
+          swelling:            body.swelling,
+          selectedAreas:       body.selectedAreas ? JSON.parse(body.selectedAreas) : [],
+          questionnaireAnswers: body.questionnaireAnswers ? JSON.parse(body.questionnaireAnswers) : {},
+        })
+      : ANALYZE_PROMPT;
+
+    const rawText = await callGeminiMultiImage({ textPrompt: prompt, images, jsonMode: true });
+
+    let analysis;
+    try { analysis = JSON.parse(rawText); }
+    catch { throw new Error(`Gemini returned non-JSON: ${rawText.slice(0, 100)}`); }
+
+    if (isDental) {
+      if (!Array.isArray(analysis.findings) || typeof analysis.severity !== 'object') {
+        throw new Error('Unexpected dental analysis shape');
+      }
+      return res.json({
+        success:      true,
+        scanType:     'dental',
+        photoCount:   files.length,
+        analysis,
+      });
+    }
+
+    if (!Array.isArray(analysis.concerns) || typeof analysis.severity !== 'object') {
+      throw new Error('Unexpected skin analysis shape');
+    }
+    return res.json({
+      success:               true,
+      scanType:              'skin',
+      analysis,
+      recommendedTreatments: deriveRecommendedTreatments(analysis),
+    });
+
+  } catch (err) {
+    console.error('[/ai/analyze multipart] AI error, using fallback:', err.message);
+    const mock = isDental ? DENTAL_MOCK_ANALYSIS : MOCK_ANALYSIS;
+    return res.json({
+      success:               true,
+      scanType,
+      analysis:              mock,
+      recommendedTreatments: isDental ? [] : deriveRecommendedTreatments(MOCK_ANALYSIS),
+      mock:                  true,
+      _error:                err.message,
+    });
+  }
+}
 
 // ── Skin handler ──────────────────────────────────────────────────────────────
 async function handleSkinAnalysis({ imageUrl, imageBase64, mimeType }, res) {
