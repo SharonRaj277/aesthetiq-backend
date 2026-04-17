@@ -8,17 +8,21 @@
  * in callers — keeps route handlers simple.
  */
 
+const fs   = require('fs');
 const path = require('path');
 const { Database } = require('node-sqlite3-wasm');
 
-const DB_PATH = path.join(__dirname, '..', 'data', 'aesthetiq.db');
+const dataDir = path.join(__dirname, '../data');
 
-// Ensure data directory exists
-const fs = require('fs');
-const dataDir = path.join(__dirname, '..', 'data');
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  console.log('📁 Created data directory');
+}
 
-const db = new Database(DB_PATH);
+const dbPath = path.join(dataDir, 'aesthetiq.db');
+console.log('📦 DB PATH:', dbPath);
+
+const db = new Database(dbPath);
 
 // WAL mode + foreign keys — use pragma() if available (better-sqlite3),
 // otherwise fall back to raw SQL (node-sqlite3-wasm)
