@@ -30,6 +30,8 @@ const GEMINI_VISION_MODEL = 'gemini-2.5-flash-lite';
 const GEMINI_BASE = `https://generativelanguage.googleapis.com/v1beta/models`;
 const AI_TIMEOUT_MS = 30_000;
 
+console.log('[ai.js] GEMINI KEY EXISTS:', !!process.env.GEMINI_API_KEY, '| using env key:', !!process.env.GEMINI_API_KEY);
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -270,7 +272,7 @@ const MOCK_ANALYSIS = {
   notes: 'Visible mild acne primarily on the forehead area with some uneven skin tone on the cheeks. AI service temporarily unavailable — showing estimated result.',
 };
 
-const MOCK_SIMULATE = (imageUrl, analysis) => ({
+const MOCK_SIMULATE = (imageUrl, _analysis) => ({
   success: true,
   before: imageUrl,
   after: imageUrl,
