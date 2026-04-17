@@ -12,8 +12,6 @@
  */
 
 const { Router } = require('express');
-const https = require('https');
-const http = require('http');
 const axios = require('axios');
 const multer = require('multer');
 const { mapSkinTreatments } = require('../engine/skinLightMapper');
@@ -25,91 +23,71 @@ const router = Router();
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AIzaSyDGEVaWc4odTn74VYS1ShxdUVMQMo9qh2w';
-const GEMINI_VISION_MODEL = 'gemini-2.5-flash-lite';
-const GEMINI_BASE = `https://generativelanguage.googleapis.com/v1beta/models`;
-const AI_TIMEOUT_MS = 30_000;
+// OpenAI — primary engine for /ai/analyze
+const OPENAI_API_KEY   = process.env.OPENAI_API_KEY;
+const OPENAI_MODEL     = 'gpt-4o';
+const OPENAI_BASE      = 'https://api.openai.com/v1/chat/completions';
 
-console.log('[ai.js] GEMINI KEY EXISTS:', !!process.env.GEMINI_API_KEY, '| using env key:', !!process.env.GEMINI_API_KEY);
+// Gemini — kept only for /ai/simulate (text-based simulation plan)
+const GEMINI_API_KEY   = process.env.GEMINI_API_KEY || 'AIzaSyDGEVaWc4odTn74VYS1ShxdUVMQMo9qh2w';
+const GEMINI_VISION_MODEL = 'gemini-2.5-flash-lite';
+const GEMINI_BASE      = `https://generativelanguage.googleapis.com/v1beta/models`;
+
+const AI_TIMEOUT_MS    = 30_000;
+
+console.log('[ai.js] OPENAI KEY EXISTS:', !!OPENAI_API_KEY, '| GEMINI KEY EXISTS:', !!process.env.GEMINI_API_KEY);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Fetch an image from a URL and return its base64-encoded content + mime type.
- * Follows redirects manually (Node's https.get does not auto-redirect).
+ * Call OpenAI GPT-4o with a text prompt and zero or more images.
+ * images: [{ data: base64string, mimeType: string }]  — pass [] for text-only
+ * imageUrls: ["https://..."]  — pass URL directly instead of base64
+ * Returns the raw text content of the first choice.
  */
-function fetchImageAsBase64(url, redirectsLeft = 5) {
-  return new Promise((resolve, reject) => {
-    if (redirectsLeft === 0) return reject(new Error('Too many redirects'));
+async function callOpenAI({ textPrompt, images = [], imageUrls = [] }) {
+  if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not set');
 
-    const client = url.startsWith('https') ? https : http;
-    const req = client.get(url, { headers: { 'User-Agent': 'AesthetiQ-AI/1.0' }, timeout: 15000 }, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307) {
-        return resolve(fetchImageAsBase64(res.headers.location, redirectsLeft - 1));
-      }
-      if (res.statusCode !== 200) {
-        return reject(new Error(`Image fetch returned HTTP ${res.statusCode}`));
-      }
+  // Build the content array: text first, then images
+  const content = [{ type: 'text', text: textPrompt }];
 
-      const contentType = res.headers['content-type'] || 'image/jpeg';
-      const mimeType = contentType.split(';')[0].trim();
-
-      if (!mimeType.startsWith('image/')) {
-        return reject(new Error(`URL did not return an image (got: ${mimeType})`));
-      }
-
-      const chunks = [];
-      res.on('data', (d) => chunks.push(d));
-      res.on('end', () => resolve({ data: Buffer.concat(chunks).toString('base64'), mimeType }));
-      res.on('error', reject);
+  for (const img of images) {
+    content.push({
+      type: 'image_url',
+      image_url: { url: `data:${img.mimeType || 'image/jpeg'};base64,${img.data}`, detail: 'high' },
     });
+  }
 
-    req.on('timeout', () => { req.destroy(); reject(new Error('Image fetch timed out')); });
-    req.on('error', reject);
-  });
-}
-
-/**
- * Call Gemini with vision (inline base64 image) or text-only.
- * Returns the raw text response.
- */
-async function callGemini({ textPrompt, imageBase64, imageMimeType, jsonMode = true }) {
-  const parts = [{ text: textPrompt }];
-  if (imageBase64) {
-    parts.push({ inline_data: { mime_type: imageMimeType || 'image/jpeg', data: imageBase64 } });
+  for (const url of imageUrls) {
+    content.push({ type: 'image_url', image_url: { url, detail: 'high' } });
   }
 
   const body = {
-    contents: [{ parts }],
-    generationConfig: {
-      temperature: 0.1,
-      ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
-    },
+    model: OPENAI_MODEL,
+    messages: [{ role: 'user', content }],
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
   };
 
-  const resp = await axios.post(
-    `${GEMINI_BASE}/${GEMINI_VISION_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-    body,
-    { timeout: AI_TIMEOUT_MS }
-  );
+  const resp = await axios.post(OPENAI_BASE, body, {
+    headers: {
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type':  'application/json',
+    },
+    timeout: AI_TIMEOUT_MS,
+  });
 
-  const text = resp.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error('Gemini returned empty response');
+  const text = resp.data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('OpenAI returned empty response');
   return text;
 }
 
 /**
- * Like callGemini but accepts an array of already-fetched images.
- * images: [{ data: base64string, mimeType: string }, ...]
+ * Gemini text-only — kept for /ai/simulate which doesn't need vision.
  */
-async function callGeminiMultiImage({ textPrompt, images = [], jsonMode = true }) {
-  const parts = [{ text: textPrompt }];
-  for (const img of images) {
-    parts.push({ inline_data: { mime_type: img.mimeType || 'image/jpeg', data: img.data } });
-  }
-
+async function callGemini({ textPrompt, jsonMode = true }) {
   const body = {
-    contents: [{ parts }],
+    contents: [{ parts: [{ text: textPrompt }] }],
     generationConfig: {
       temperature: 0.1,
       ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
@@ -130,7 +108,7 @@ async function callGeminiMultiImage({ textPrompt, images = [], jsonMode = true }
 // ─── Prompts ──────────────────────────────────────────────────────────────────
 
 const ANALYZE_PROMPT = `You are an aesthetic skincare AI assistant working alongside licensed dermatologists.
-Analyze this image for visible skin concerns only. Do NOT provide medical diagnoses.
+Analyze the facial/skin condition from the provided image(s). Do NOT provide medical diagnoses.
 
 Output ONLY a valid JSON object — no markdown, no explanation — with this exact structure:
 {
@@ -139,16 +117,18 @@ Output ONLY a valid JSON object — no markdown, no explanation — with this ex
     "acne": "mild",
     "pigmentation": "moderate"
   },
-  "notes": "Brief factual observation about visible skin condition."
+  "notes": "Brief factual observation about visible skin condition.",
+  "overallScore": 78
 }
 
 Rules:
-- concerns: array of zero or more issues visible in the image, chosen ONLY from:
+- concerns: array of zero or more issues visible, chosen ONLY from:
     acne, pigmentation, dryness, oiliness, sensitivity, uneven_tone, fine_lines, dark_spots, redness, enlarged_pores
-- severity: include an entry for each concern listed, values must be: none, mild, moderate, or severe
-- notes: 1–2 factual sentences describing what is visually observed; no diagnosis, no prescriptions
+- severity: entry for each concern — values: none, mild, moderate, or severe
+- notes: 1–2 factual sentences; no diagnosis, no prescriptions
+- overallScore: integer 0–100 representing overall skin health (100 = excellent, 0 = severe concerns)
 - If the image is NOT a face or skin photo, return:
-    {"concerns":[],"severity":{},"notes":"Unable to analyze: image does not appear to show skin."}
+    {"concerns":[],"severity":{},"notes":"Unable to analyze: image does not appear to show skin.","overallScore":0}
 - Be conservative — only flag concerns that are clearly visible`;
 
 // ─── Dental prompt builder ────────────────────────────────────────────────────
@@ -545,7 +525,7 @@ async function handleMultipartAnalysis({ files, scanType, body }, res) {
         })
       : ANALYZE_PROMPT;
 
-    const rawText = await callGeminiMultiImage({ textPrompt: prompt, images, jsonMode: true });
+    const rawText = await callOpenAI({ textPrompt: prompt, images });
 
     let analysis;
     try { analysis = JSON.parse(rawText); }
@@ -602,30 +582,23 @@ async function handleSkinAnalysis({ imageUrl, imageBase64, mimeType }, res) {
   }
 
   try {
-    let base64Data, imageMimeType;
+    let images = [], imageUrls = [];
 
     if (imageBase64) {
-      base64Data    = imageBase64;
-      imageMimeType = mimeType || 'image/jpeg';
-    } else {
-      const fetched = await fetchImageAsBase64(imageUrl);
-      base64Data    = fetched.data;
-      imageMimeType = fetched.mimeType;
+      images = [{ data: imageBase64, mimeType: mimeType || 'image/jpeg' }];
+    } else if (imageUrl) {
+      // Pass URL directly to OpenAI — no need to fetch and re-encode
+      imageUrls = [imageUrl];
     }
 
-    const rawText = await callGemini({
-      textPrompt: ANALYZE_PROMPT,
-      imageBase64: base64Data,
-      imageMimeType,
-      jsonMode: true,
-    });
+    const rawText = await callOpenAI({ textPrompt: ANALYZE_PROMPT, images, imageUrls });
 
     let analysis;
     try { analysis = JSON.parse(rawText); }
-    catch { throw new Error(`Gemini returned non-JSON: ${rawText.slice(0, 100)}`); }
+    catch { throw new Error(`OpenAI returned non-JSON: ${rawText.slice(0, 100)}`); }
 
     if (!Array.isArray(analysis.concerns) || typeof analysis.severity !== 'object') {
-      throw new Error('Unexpected analysis shape from Gemini');
+      throw new Error('Unexpected analysis shape from OpenAI');
     }
 
     return res.json({
@@ -687,20 +660,16 @@ async function handleDentalAnalysis(body, res) {
   });
 
   try {
-    // Fetch all images in parallel
-    const images = await Promise.all(
-      urlsToProcess.map((url) => fetchImageAsBase64(url))
-    );
-
-    const rawText = await callGeminiMultiImage({ textPrompt: prompt, images, jsonMode: true });
+    // Pass URLs directly to OpenAI — no need to fetch and re-encode
+    const rawText = await callOpenAI({ textPrompt: prompt, imageUrls: urlsToProcess });
 
     let analysis;
     try { analysis = JSON.parse(rawText); }
-    catch { throw new Error(`Gemini returned non-JSON: ${rawText.slice(0, 100)}`); }
+    catch { throw new Error(`OpenAI returned non-JSON: ${rawText.slice(0, 100)}`); }
 
     // Validate dental response shape
     if (!Array.isArray(analysis.findings) || typeof analysis.severity !== 'object') {
-      throw new Error('Unexpected dental analysis shape from Gemini');
+      throw new Error('Unexpected dental analysis shape from OpenAI');
     }
 
     return res.json({
