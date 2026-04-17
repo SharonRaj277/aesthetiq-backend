@@ -233,9 +233,12 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ success: false, error: 'Internal server error' });
 });
 
+// ─── Uncaught error handlers — keep Railway logs readable ────────────────────
+process.on('uncaughtException',  (err) => console.error('[uncaughtException]',  err));
+process.on('unhandledRejection', (err) => console.error('[unhandledRejection]', err));
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\nAesthetiQ backend running on port ${PORT}`);
-  console.log(`CORS enabled for: all origins\n`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
