@@ -2,7 +2,6 @@
 
 console.log('SERVER START FILE LOADED');
 
-// ─── Crash handlers — registered FIRST so nothing is missed ──────────────────
 process.on('uncaughtException',  (err) => console.error('[uncaughtException]',  err.stack || err));
 process.on('unhandledRejection', (err) => console.error('[unhandledRejection]', err));
 
@@ -12,103 +11,73 @@ require('dotenv').config();
 
 const app = express();
 
-// ─── CORS ─────────────────────────────────────────────────────────────────────
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'AesthetiQ Backend' }));
 
-// ─── Start server IMMEDIATELY — routes attached below while already listening ─
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
-
-// ─── Load routes — each in its own try/catch so one failure never blocks others
+// ─── Routes ───────────────────────────────────────────────────────────────────
 console.log('LOADING ROUTES...');
 
-function safeMount(path, routeFile) {
-  try {
-    const router = require(routeFile);
-    app.use(path, router);
-    console.log(`  ✓ ${path} mounted`);
-  } catch (err) {
-    console.error(`  ✗ FAILED to mount ${path}:`, err.message);
-    console.error(err.stack);
-  }
-}
-
-safeMount('/auth',     './routes/auth');
-safeMount('/admin',    './routes/admin');
-safeMount('/doctor',   './routes/doctor');
-safeMount('/patient',  './routes/patient');
-safeMount('/ai',       './routes/ai');
-safeMount('/analysis', './routes/analysis');
+app.use('/auth',     require('./routes/auth'));
+app.use('/admin',    require('./routes/admin'));
+app.use('/doctor',   require('./routes/doctor'));
+app.use('/patient',  require('./routes/patient'));
+app.use('/ai',       require('./routes/ai'));
+app.use('/analysis', require('./routes/analysis'));
 
 console.log('ROUTES LOADED');
 
-// ─── Inline API routes (need db) ──────────────────────────────────────────────
-let db, requireAuth;
+// ─── DB + auth middleware ──────────────────────────────────────────────────────
+const db          = require('./db/database');
+const { requireAuth } = require('./middleware/auth');
 
-try {
-  db          = require('./db/database');
-  requireAuth = require('./middleware/auth').requireAuth;
-  console.log('  ✓ db + auth middleware loaded');
-} catch (err) {
-  console.error('  ✗ FAILED to load db/auth:', err.message, err.stack);
-}
-
-// POST /api/scan/unlock
-if (db && requireAuth) {
-  app.post('/api/scan/unlock', requireAuth(['patient', 'doctor', 'admin']), (req, res) => {
-    const { scanId, patientId, paymentVerified } = req.body || {};
-
-    if (!scanId || typeof scanId !== 'string' || !scanId.trim()) {
-      return res.status(400).json({ success: false, error: 'scanId is required' });
-    }
-
-    if (paymentVerified !== undefined && paymentVerified !== true) {
-      return res.status(402).json({ success: false, error: 'Payment not verified — scan cannot be unlocked' });
-    }
-
-    try {
-      const existing = db.getScanResultById(scanId.trim());
-      if (!existing) return res.status(404).json({ success: false, error: 'Scan not found' });
-
-      const { id: callerId, role } = req.user;
-      if (role === 'patient') {
-        const claimedPatientId = (patientId || callerId).toString();
-        if (existing.patientId !== claimedPatientId || existing.patientId !== callerId) {
-          return res.status(403).json({ success: false, error: 'You are not authorised to unlock this scan' });
-        }
-      }
-
-      if (existing.isUnlocked) return res.json({ success: true, alreadyUnlocked: true });
-
-      const updated = db.unlockScanResult(scanId.trim());
-      if (!updated) return res.status(500).json({ success: false, error: 'Failed to unlock scan' });
-
-      return res.json({ success: true });
-    } catch (err) {
-      console.error('[POST /api/scan/unlock]', err.message);
-      return res.status(500).json({ success: false, error: 'Failed to unlock scan' });
-    }
-  });
-}
-
-// ─── Analytics ────────────────────────────────────────────────────────────────
+// ─── API routes ───────────────────────────────────────────────────────────────
 const FUNNEL_EVENTS    = ['scan_started', 'scan_completed', 'teaser_viewed', 'unlock_clicked', 'payment_success'];
 const SCAN_TYPES       = ['facial', 'skin', 'dental'];
 const BREAKDOWN_EVENTS = ['teaser_viewed', 'unlock_clicked', 'payment_success'];
 
-function rate(numerator, denominator) {
-  if (!denominator) return null;
-  return parseFloat((numerator / denominator).toFixed(4));
+function rate(n, d) {
+  if (!d) return null;
+  return parseFloat((n / d).toFixed(4));
 }
 
-app.get('/api/analytics/funnel', (req, res) => {
-  if (!db) return res.status(503).json({ success: false, error: 'Database not available' });
+app.post('/api/scan/unlock', requireAuth(['patient', 'doctor', 'admin']), (req, res) => {
+  const { scanId, patientId, paymentVerified } = req.body || {};
+
+  if (!scanId || typeof scanId !== 'string' || !scanId.trim()) {
+    return res.status(400).json({ success: false, error: 'scanId is required' });
+  }
+  if (paymentVerified !== undefined && paymentVerified !== true) {
+    return res.status(402).json({ success: false, error: 'Payment not verified — scan cannot be unlocked' });
+  }
+
+  try {
+    const existing = db.getScanResultById(scanId.trim());
+    if (!existing) return res.status(404).json({ success: false, error: 'Scan not found' });
+
+    const { id: callerId, role } = req.user;
+    if (role === 'patient') {
+      const claimedPatientId = (patientId || callerId).toString();
+      if (existing.patientId !== claimedPatientId || existing.patientId !== callerId) {
+        return res.status(403).json({ success: false, error: 'You are not authorised to unlock this scan' });
+      }
+    }
+
+    if (existing.isUnlocked) return res.json({ success: true, alreadyUnlocked: true });
+
+    const updated = db.unlockScanResult(scanId.trim());
+    if (!updated) return res.status(500).json({ success: false, error: 'Failed to unlock scan' });
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[POST /api/scan/unlock]', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to unlock scan' });
+  }
+});
+
+app.get('/api/analytics/funnel', (_req, res) => {
   try {
     const counts = db.getFunnelCounts(FUNNEL_EVENTS);
     const { scan_started: started, scan_completed: completed, teaser_viewed: teaserViewed, unlock_clicked: unlockClicked, payment_success: paymentSuccess } = counts;
@@ -116,8 +85,8 @@ app.get('/api/analytics/funnel', (req, res) => {
       success: true,
       funnel: { scanStarted: started, scanCompleted: completed, teaserViewed, unlockClicked, paymentSuccess },
       conversionRates: {
-        completionRate: rate(completed,      started),
-        clickRate:      rate(unlockClicked,  teaserViewed),
+        completionRate: rate(completed, started),
+        clickRate:      rate(unlockClicked, teaserViewed),
         paymentRate:    rate(paymentSuccess, unlockClicked),
       },
     });
@@ -127,8 +96,7 @@ app.get('/api/analytics/funnel', (req, res) => {
   }
 });
 
-app.get('/api/analytics/summary', (req, res) => {
-  if (!db) return res.status(503).json({ success: false, error: 'Database not available' });
+app.get('/api/analytics/summary', (_req, res) => {
   try {
     const counts = db.getFunnelCounts(FUNNEL_EVENTS);
     const byType = db.getFunnelCountsByScanType(BREAKDOWN_EVENTS, SCAN_TYPES);
@@ -155,7 +123,6 @@ app.get('/api/analytics/summary', (req, res) => {
 });
 
 app.post('/api/analytics/event', (req, res) => {
-  if (!db) return res.status(503).json({ success: false, error: 'Database not available' });
   const { eventName, userId, scanId, scanType, timestamp } = req.body || {};
   if (!eventName || typeof eventName !== 'string' || !eventName.trim()) {
     return res.status(400).json({ success: false, error: 'eventName is required' });
@@ -186,7 +153,7 @@ try {
   console.warn('  ✗ Could not mount /api:', e.message);
 }
 
-// ─── 404 fallback ─────────────────────────────────────────────────────────────
+// ─── 404 ──────────────────────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'Route not found' }));
 
 // ─── JSON parse error handler ─────────────────────────────────────────────────
@@ -197,4 +164,10 @@ app.use((err, _req, res, _next) => {
   }
   console.error('[unhandled error]', err.message);
   res.status(500).json({ success: false, error: 'Internal server error' });
+});
+
+// ─── Start ────────────────────────────────────────────────────────────────────
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
