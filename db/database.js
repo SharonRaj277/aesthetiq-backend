@@ -20,9 +20,17 @@ if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 const db = new Database(DB_PATH);
 
-// WAL mode: better concurrent read performance
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+// WAL mode + foreign keys — use pragma() if available (better-sqlite3),
+// otherwise fall back to raw SQL (node-sqlite3-wasm)
+if (typeof db.pragma === 'function') {
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+} else {
+  db.run('PRAGMA journal_mode = WAL');
+  db.run('PRAGMA foreign_keys = ON');
+}
+
+console.log('DB initialized');
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
