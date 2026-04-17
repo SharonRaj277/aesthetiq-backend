@@ -9,7 +9,7 @@
  */
 
 const path = require('path');
-const Database = require('better-sqlite3');
+const { Database } = require('node-sqlite3-wasm');
 
 const DB_PATH = path.join(__dirname, '..', 'data', 'aesthetiq.db');
 
@@ -321,7 +321,6 @@ module.exports = {
   },
 
   updateDoctorStatus(id, status) {
-    const isOnline = (status === 'active') ? undefined : 0; // don't force online=1 on activate
     // For suspended/inactive: force offline. For active: keep existing value.
     if (status === 'suspended' || status === 'inactive') {
       stmts.updateDoctorStatus.run({ id, status, is_online: 0 });

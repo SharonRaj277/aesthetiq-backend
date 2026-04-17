@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "postinstall": "npm rebuild better-sqlite3",
+    "postinstall": "echo 'no native rebuild needed'",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -16,7 +16,7 @@
     "@aws-sdk/client-rekognition": "^3.600.0",
     "axios": "^1.7.9",
     "multer": "^1.4.5-lts.2",
-    "better-sqlite3": "^12.8.0",
+    "node-sqlite3-wasm": "^0.8.9",
     "cors": "^2.8.6",
     "dotenv": "^17.4.0",
     "express": "^5.2.1"
