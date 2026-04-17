@@ -14,6 +14,7 @@
 const { Router } = require('express');
 const axios = require('axios');
 const multer = require('multer');
+const { RekognitionClient, DetectFacesCommand } = require('@aws-sdk/client-rekognition');
 const { mapSkinTreatments } = require('../engine/skinLightMapper');
 
 // In-memory storage — files available as req.files[n].buffer
@@ -35,7 +36,54 @@ const GEMINI_BASE      = `https://generativelanguage.googleapis.com/v1beta/model
 
 const AI_TIMEOUT_MS    = 30_000;
 
-console.log('[ai.js] OPENAI KEY EXISTS:', !!OPENAI_API_KEY, '| GEMINI KEY EXISTS:', !!process.env.GEMINI_API_KEY);
+// AWS Rekognition — face landmark detection (runs before OpenAI for skin scans)
+const rekognitionClient = process.env.AWS_ACCESS_KEY_ID
+  ? new RekognitionClient({
+      region:      process.env.AWS_REGION || 'us-east-1',
+      credentials: {
+        accessKeyId:     process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      },
+    })
+  : null;
+
+console.log('[ai.js] OPENAI KEY EXISTS:', !!OPENAI_API_KEY, '| GEMINI KEY EXISTS:', !!process.env.GEMINI_API_KEY, '| AWS KEY EXISTS:', !!process.env.AWS_ACCESS_KEY_ID);
+
+// ─── AWS Rekognition helper ────────────────────────────────────────────────────
+/**
+ * callRekognition(imageBuffer)
+ *
+ * Sends a raw image buffer to AWS Rekognition DetectFaces.
+ * Returns { landmarks, faceDetails, landmarkCount } or throws.
+ *
+ * @param {Buffer} imageBuffer
+ */
+async function callRekognition(imageBuffer) {
+  console.log('🔥 AWS START');
+
+  if (!rekognitionClient) throw new Error('AWS credentials not configured');
+
+  const command = new DetectFacesCommand({
+    Image:      { Bytes: imageBuffer },
+    Attributes: ['ALL'],
+  });
+
+  const response = await rekognitionClient.send(command);
+  console.log('✅ AWS RESPONSE:', JSON.stringify(response, null, 2));
+
+  const landmarks = response.FaceDetails?.[0]?.Landmarks;
+  console.log('📍 LANDMARK COUNT:', landmarks?.length ?? 0);
+
+  if (!response.FaceDetails || response.FaceDetails.length === 0) {
+    throw new Error('No face detected');
+  }
+
+  return {
+    landmarks:    landmarks    || [],
+    faceDetails:  response.FaceDetails[0],
+    landmarkCount: landmarks?.length ?? 0,
+  };
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -516,6 +564,19 @@ async function handleMultipartAnalysis({ files, scanType, body }, res) {
   const isDental = scanType === 'dental';
 
   try {
+    // Run Rekognition on first image buffer (skin scans only — face landmark detection)
+    let rekognitionData = null;
+    if (!isDental && files.length > 0) {
+      try {
+        rekognitionData = await callRekognition(files[0].buffer);
+      } catch (rekErr) {
+        console.warn('[/ai/analyze multipart] Rekognition skipped:', rekErr.message);
+        if (rekErr.message === 'No face detected') {
+          return res.status(400).json({ success: false, error: 'No face detected in image' });
+        }
+      }
+    }
+
     const prompt = isDental
       ? buildDentalPrompt({
           painLevel:           body.painLevel,
@@ -529,7 +590,7 @@ async function handleMultipartAnalysis({ files, scanType, body }, res) {
 
     let analysis;
     try { analysis = JSON.parse(rawText); }
-    catch { throw new Error(`Gemini returned non-JSON: ${rawText.slice(0, 100)}`); }
+    catch { throw new Error(`OpenAI returned non-JSON: ${rawText.slice(0, 100)}`); }
 
     if (isDental) {
       if (!Array.isArray(analysis.findings) || typeof analysis.severity !== 'object') {
@@ -551,6 +612,7 @@ async function handleMultipartAnalysis({ files, scanType, body }, res) {
       scanType:              'skin',
       analysis,
       recommendedTreatments: deriveRecommendedTreatments(analysis),
+      ...(rekognitionData ? { landmarks: rekognitionData.landmarks, landmarkCount: rekognitionData.landmarkCount } : {}),
     });
 
   } catch (err) {
@@ -583,12 +645,25 @@ async function handleSkinAnalysis({ imageUrl, imageBase64, mimeType }, res) {
 
   try {
     let images = [], imageUrls = [];
+    let rekognitionData = null;
 
     if (imageBase64) {
       images = [{ data: imageBase64, mimeType: mimeType || 'image/jpeg' }];
+
+      // Run Rekognition on base64 input (convert to buffer)
+      try {
+        const buffer = Buffer.from(imageBase64, 'base64');
+        rekognitionData = await callRekognition(buffer);
+      } catch (rekErr) {
+        console.warn('[/ai/analyze skin] Rekognition skipped:', rekErr.message);
+        if (rekErr.message === 'No face detected') {
+          return res.status(400).json({ success: false, error: 'No face detected in image' });
+        }
+      }
     } else if (imageUrl) {
-      // Pass URL directly to OpenAI — no need to fetch and re-encode
       imageUrls = [imageUrl];
+      // Rekognition requires a buffer or S3 reference — skip for URL-only requests
+      // (OpenAI vision handles the URL directly)
     }
 
     const rawText = await callOpenAI({ textPrompt: ANALYZE_PROMPT, images, imageUrls });
@@ -606,6 +681,7 @@ async function handleSkinAnalysis({ imageUrl, imageBase64, mimeType }, res) {
       scanType: 'skin',
       analysis,
       recommendedTreatments: deriveRecommendedTreatments(analysis),
+      ...(rekognitionData ? { landmarks: rekognitionData.landmarks, landmarkCount: rekognitionData.landmarkCount } : {}),
     });
 
   } catch (err) {
