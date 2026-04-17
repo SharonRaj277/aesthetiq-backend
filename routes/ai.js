@@ -518,15 +518,33 @@ function validateHttpUrl(url) {
 //   }
 
 router.post('/analyze', upload.array('images'), async (req, res) => {
-  console.log('[/ai/analyze] hit — body keys:', Object.keys(req.body || {}), '| files:', req.files?.length ?? 0);
+  const files = req.files;
+  const body  = req.body || {};
+  console.log('[/ai/analyze] hit — body keys:', Object.keys(body), '| files:', files?.length ?? 0);
+
   try {
-    const files    = req.files;   // populated by multer when Content-Type is multipart
-    const body     = req.body || {};
     const scanType = typeof body.scanType === 'string' ? body.scanType.toLowerCase()
                    : typeof body.type    === 'string' ? body.type.toLowerCase()
                    : 'skin';
 
-    // ── Branch: multipart/form-data (React Native FormData) ───────────────────
+    // ── Detect local file:// URIs sent from React Native ─────────────────────
+    // The app sends { imageUris: ["file:///..."], type: "face" } as JSON.
+    // These paths are only accessible on the device — backend cannot reach them.
+    // Return a clear error so the frontend developer knows to send base64 instead.
+    const imageUris = body.imageUris || body.uris;
+    if (Array.isArray(imageUris) && imageUris.length > 0) {
+      const hasLocalUri = imageUris.some((u) => typeof u === 'string' && u.startsWith('file://'));
+      if (hasLocalUri) {
+        console.warn('[/ai/analyze] received local file:// URIs — cannot access device files from server');
+        return res.status(400).json({
+          success: false,
+          error: 'Local file:// URIs cannot be accessed by the server. Please convert images to base64 before sending, or use FormData with the "images" field.',
+          hint: 'Use FileSystem.readAsStringAsync(uri, { encoding: "base64" }) in Expo, then POST { imageBase64, mimeType } or use FormData with images[] files.',
+        });
+      }
+    }
+
+    // ── Branch: multipart/form-data (React Native FormData with file content) ─
     if (files && files.length > 0) {
       return await handleMultipartAnalysis({ files, scanType, body }, res);
     }
@@ -536,7 +554,7 @@ router.post('/analyze', upload.array('images'), async (req, res) => {
       return await handleDentalAnalysis(body, res);
     }
 
-    // ── Branch: skin JSON (original behaviour) ────────────────────────────────
+    // ── Branch: skin JSON ─────────────────────────────────────────────────────
     return await handleSkinAnalysis(body, res);
 
   } catch (err) {
