@@ -20,17 +20,23 @@ app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'AesthetiQ B
 // ─── Routes ───────────────────────────────────────────────────────────────────
 console.log('LOADING ROUTES...');
 
-try { app.use('/auth',     require('./routes/auth'));     console.log('✓ /auth routes mounted');     } catch (err) { console.error('❌ Failed to load /auth routes:', err); }
-try { app.use('/admin',    require('./routes/admin'));    console.log('✓ /admin routes mounted');    } catch (err) { console.error('❌ Failed to load /admin routes:', err); }
-try { app.use('/doctor',   require('./routes/doctor'));   console.log('✓ /doctor routes mounted');   } catch (err) { console.error('❌ Failed to load /doctor routes:', err); }
-try { app.use('/patient',  require('./routes/patient'));  console.log('✓ /patient routes mounted');  } catch (err) { console.error('❌ Failed to load /patient routes:', err); }
-try { app.use('/ai',       require('./routes/ai'));       console.log('✓ /ai routes mounted');       } catch (err) { console.error('❌ Failed to load /ai routes:', err); }
-try { app.use('/analysis', require('./routes/analysis')); console.log('✓ /analysis routes mounted'); } catch (err) { console.error('❌ Failed to load /analysis routes:', err); }
+try { app.use('/auth',     require('./routes/auth'));      console.log('✓ /auth routes mounted');     } catch (err) { console.error('❌ /auth failed:', err.message, err.stack); }
+try { app.use('/admin',    require('./routes/admin'));     console.log('✓ /admin routes mounted');    } catch (err) { console.error('❌ /admin failed:', err.message, err.stack); }
+try { app.use('/doctor',   require('./routes/doctor'));    console.log('✓ /doctor routes mounted');   } catch (err) { console.error('❌ /doctor failed:', err.message, err.stack); }
+try { app.use('/patient',  require('./routes/patient'));   console.log('✓ /patient routes mounted');  } catch (err) { console.error('❌ /patient failed:', err.message, err.stack); }
+try { app.use('/ai',       require('./routes/ai'));        console.log('✓ /ai routes mounted');       } catch (err) { console.error('❌ /ai failed:', err.message, err.stack); }
+try { app.use('/analysis', require('./routes/analysis')); console.log('✓ /analysis routes mounted'); } catch (err) { console.error('❌ /analysis failed:', err.message, err.stack); }
 
 console.log('ROUTES LOADED');
 
 // ─── DB + auth middleware ──────────────────────────────────────────────────────
-const db = require('./db/database');
+let db;
+try {
+  db = require('./db/database');
+  console.log('✓ database loaded');
+} catch (err) {
+  console.error('❌ database failed to load:', err.message, err.stack);
+}
 
 // ─── API routes ───────────────────────────────────────────────────────────────
 const FUNNEL_EVENTS    = ['scan_started', 'scan_completed', 'teaser_viewed', 'unlock_clicked', 'payment_success'];
@@ -43,8 +49,7 @@ function rate(n, d) {
 }
 
 app.post('/api/scan/unlock', (req, res) => {
-  // Auth is checked but not enforced — unauthenticated callers are treated as patients.
-  // Full enforcement can be re-enabled once the frontend sends Bearer tokens.
+  if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
   try {
     const header = req.headers['authorization'] || '';
     const parts  = header.replace('Bearer ', '').split('.');
@@ -87,6 +92,7 @@ app.post('/api/scan/unlock', (req, res) => {
 });
 
 app.get('/api/analytics/funnel', (_req, res) => {
+  if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
   try {
     const counts = db.getFunnelCounts(FUNNEL_EVENTS);
     const { scan_started: started, scan_completed: completed, teaser_viewed: teaserViewed, unlock_clicked: unlockClicked, payment_success: paymentSuccess } = counts;
@@ -106,6 +112,7 @@ app.get('/api/analytics/funnel', (_req, res) => {
 });
 
 app.get('/api/analytics/summary', (_req, res) => {
+  if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
   try {
     const counts = db.getFunnelCounts(FUNNEL_EVENTS);
     const byType = db.getFunnelCountsByScanType(BREAKDOWN_EVENTS, SCAN_TYPES);
@@ -132,6 +139,7 @@ app.get('/api/analytics/summary', (_req, res) => {
 });
 
 app.post('/api/analytics/event', (req, res) => {
+  if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
   const { eventName, userId, scanId, scanType, timestamp } = req.body || {};
   if (!eventName || typeof eventName !== 'string' || !eventName.trim()) {
     return res.status(400).json({ success: false, error: 'eventName is required' });
