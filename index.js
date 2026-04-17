@@ -1,9 +1,9 @@
 'use strict';
 
-console.log('SERVER START FILE LOADED');
+console.log('🔥 SERVER START');
 
-process.on('uncaughtException',  (err) => console.error('[uncaughtException]',  err.stack || err));
-process.on('unhandledRejection', (err) => console.error('[unhandledRejection]', err));
+process.on('uncaughtException',  (err) => console.error('UNCAUGHT:', err.stack || err));
+process.on('unhandledRejection', (err) => console.error('UNHANDLED:', err));
 
 const express = require('express');
 const cors    = require('cors');
@@ -20,12 +20,12 @@ app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'AesthetiQ B
 // ─── Routes ───────────────────────────────────────────────────────────────────
 console.log('LOADING ROUTES...');
 
-app.use('/auth',     require('./routes/auth'));
-app.use('/admin',    require('./routes/admin'));
-app.use('/doctor',   require('./routes/doctor'));
-app.use('/patient',  require('./routes/patient'));
-app.use('/ai',       require('./routes/ai'));
-app.use('/analysis', require('./routes/analysis'));
+try { app.use('/auth',     require('./routes/auth'));     console.log('✓ /auth routes mounted');     } catch (err) { console.error('❌ Failed to load /auth routes:', err); }
+try { app.use('/admin',    require('./routes/admin'));    console.log('✓ /admin routes mounted');    } catch (err) { console.error('❌ Failed to load /admin routes:', err); }
+try { app.use('/doctor',   require('./routes/doctor'));   console.log('✓ /doctor routes mounted');   } catch (err) { console.error('❌ Failed to load /doctor routes:', err); }
+try { app.use('/patient',  require('./routes/patient'));  console.log('✓ /patient routes mounted');  } catch (err) { console.error('❌ Failed to load /patient routes:', err); }
+try { app.use('/ai',       require('./routes/ai'));       console.log('✓ /ai routes mounted');       } catch (err) { console.error('❌ Failed to load /ai routes:', err); }
+try { app.use('/analysis', require('./routes/analysis')); console.log('✓ /analysis routes mounted'); } catch (err) { console.error('❌ Failed to load /analysis routes:', err); }
 
 console.log('ROUTES LOADED');
 
